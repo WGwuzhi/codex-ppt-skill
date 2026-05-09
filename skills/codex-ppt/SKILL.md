@@ -27,13 +27,14 @@ Do not use this skill for ordinary editable PowerPoint layouts where each textbo
 
 This skill supports two image backends:
 
-1. Built-in image tool, preferred when available.
+1. Built-in image tool, preferred when available. Example tool names: Codex `image_gen`; OpenClaw `image_generate`.
 2. Local API/CLI fallback, using `scripts/image_gen.py`.
 
 Backend selection rules:
 
-- Prefer the built-in image tool when available. Resolution, quality, aspect ratio, or slide-edit requests alone do not require CLI/API fallback.
+- Prefer the built-in image tool when available. In Codex, this usually means the built-in `image_gen` tool. In OpenClaw, this may be `image_generate`. Resolution, quality, aspect ratio, or slide-edit requests alone do not require CLI/API fallback.
 - Use CLI/API fallback only when the built-in tool is unavailable, the user explicitly asks for API/CLI or a third-party OpenAI-compatible proxy, or the requested capability is unavailable in the built-in tool.
+- Before generating the first image, tell the user which backend you plan to use, why, and ask for confirmation. Do not treat being in a specific agent environment as proof that the built-in image tool is available.
 - CLI/API fallback loads `~/.codex-ppt-skill/.env` automatically. Run the CLI normally; do not manually parse `.env` or ask for configuration before an error.
 - Ask for configuration only after the CLI reports missing `OPENAI_API_KEY`, after authentication/base URL/model errors, or when the user explicitly wants to change API settings. Configure provided values with `scripts/codex_ppt_runtime.py config --api-key`.
 - For detailed fallback setup after an error, read `docs/image-model-configuration.md`.
@@ -44,7 +45,7 @@ CLI/API fallback commands use the shared runtime environment. Let `{skill_root}`
 ~/.codex-ppt-skill/.venv/bin/python {skill_root}/scripts/image_gen.py generate \
   --model gpt-image-2 \
   --prompt-file {prompt_file} \
-  --size 1920x1088 \
+  --size 2560x1440 \
   --quality medium \
   --out {base_dir}/{deck_name}/origin_image/slide_01.png
 ```
@@ -63,7 +64,7 @@ The fallback CLI supports:
 - `edit`: edit one or more existing images, optionally with a mask.
 - `generate-batch`: generate many slide images from a JSONL prompt file.
 
-The fallback CLI defaults to 1080p-level landscape output, `1920x1088`, because `gpt-image-2` sizes must use dimensions divisible by 16. For 4K landscape slides, use `--size 3840x2160 --quality high` only when the user asks for 4K, text-heavy slides need sharper output, or the default result is blurry. For portrait assets, use `--size 2160x3840` only if the user requests portrait output.
+The fallback CLI defaults to 2K 16:9 landscape output, `2560x1440`, because it keeps slide text clearer while staying below the `gpt-image-2` pixel limit. For 4K landscape slides, use `--size 3840x2160 --quality high` only when the user asks for 4K, text-heavy slides need sharper output, or the default result is blurry. For portrait assets, use `--size 2160x3840` only if the user requests portrait output.
 
 Transparent-background requests:
 
@@ -151,9 +152,25 @@ C. 数据仪表盘风：指标卡、图表感布局，适合数据密集型报�
 你选哪个？也可以指定要调整的配色、布局或插画方向，或者上传一张喜欢的 PPT 风格图片让我参考。
 ```
 
-### 4. Generate One Sample Slide For Approval
+### 4. Confirm Image Backend Before Generation
 
-After the outline and style are confirmed, generate exactly one sample slide image before full production.
+Before generating any slide image, ask the user to confirm the image backend. Keep the confirmation short and concrete:
+
+```text
+我准备使用内置图片生成工具生成样张：Codex 中通常是 image_gen，OpenClaw 中通常是 image_generate。当前环境可直接调用该工具，因此不会要求配置第三方 API。可以开始生成 1 页样张吗？
+```
+
+If using CLI/API fallback, say that explicitly and name the configured target:
+
+```text
+我准备使用本地 API/CLI fallback 生成样张，读取 ~/.codex-ppt-skill/.env 中的 OPENAI_BASE_URL / CODEX_PPT_IMAGE_MODEL 配置。可以开始生成 1 页样张吗？
+```
+
+Wait for confirmation before generating the sample slide. If the user questions the backend, resolve that before continuing.
+
+### 5. Generate One Sample Slide For Approval
+
+After the outline, style, and image backend are confirmed, generate exactly one sample slide image before full production.
 
 Sample slide requirements:
 
@@ -166,7 +183,7 @@ Sample slide requirements:
 
 Do not generate the full deck until the user approves the sample slide. If the user requests changes, revise the style description and regenerate that same `slide_XX.png` file first. Once approved, keep that file as the final slide for its page. Do not create `sample_slide.png` in `origin_image/`, because the assembly step is designed around final `slide_XX` filenames.
 
-### 5. Create The Project Directory
+### 6. Create The Project Directory
 
 Use this output structure:
 
@@ -189,7 +206,7 @@ You may initialize the directory structure with:
 ~/.codex-ppt-skill/.venv/bin/python {skill_root}/scripts/assemble_ppt.py {base_dir} {deck_name}.pptx --init
 ```
 
-### 6. Generate All Slide Images
+### 7. Generate All Slide Images
 
 Generate one image per slide with the selected image backend. Every final `slide_XX.png` must be produced by the built-in image tool or by `scripts/image_gen.py`; programmatic rendering or hybrid text overlay is not acceptable for slide image creation.
 
@@ -267,7 +284,7 @@ In CLI/API fallback mode, you may generate slides one at a time or use `generate
 ~/.codex-ppt-skill/.venv/bin/python {skill_root}/scripts/image_gen.py generate-batch \
   --input {base_dir}/{deck_name}/image_prompts.jsonl \
   --out-dir {base_dir}/{deck_name}/origin_image \
-  --size 1920x1088 \
+  --size 2560x1440 \
   --quality medium \
   --concurrency 5
 ```
@@ -284,7 +301,7 @@ Final slide image naming rules:
 
 For Chinese decks, explicitly ask the image backend to render Chinese text accurately and avoid garbled characters.
 
-### 7. Quality Check And Repair
+### 8. Quality Check And Repair
 
 Before assembling the PPT, inspect every slide image. Check:
 
@@ -297,7 +314,7 @@ Before assembling the PPT, inspect every slide image. Check:
 
 If a slide has severe text or layout issues, regenerate it with a more constrained prompt. If a slide is mostly correct but has a localized issue, use the selected backend's edit capability when available. In CLI/API fallback mode, use `scripts/image_gen.py edit --image {slide_path} --prompt ... --out {new_slide_path}` and replace the final slide only after validating the edited output.
 
-### 8. Write Speaker Notes
+### 9. Write Speaker Notes
 
 Make sure `outline.md` reflects the final confirmed deck outline from step 2. Do not recreate it from scratch here.
 
@@ -315,7 +332,7 @@ Use headings that the assembly script can map back to slide numbers:
 {Speaker notes for slide 2}
 ```
 
-### 9. Assemble The PPT
+### 10. Assemble The PPT
 
 Run:
 
@@ -332,7 +349,7 @@ Important:
 - If `{base_dir}/{deck_name}/speech.md` exists and uses `Slide N` headings, the script writes those notes into the corresponding PPT speaker notes.
 - The script writes `{base_dir}/{deck_name}/{deck_name}.pptx`.
 
-### 10. Final Report
+### 11. Final Report
 
 Report:
 

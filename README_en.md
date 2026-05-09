@@ -176,16 +176,17 @@ The skill follows this workflow:
 1. Read the source content and plan the deck outline.
 2. Generate `outline.md` and ask you to confirm slide count, slide titles, and key points.
 3. Offer 2-3 visual style options and recommend one for user confirmation.
-4. Generate one sample slide with the available image backend for approval of style, layout rhythm, and text quality.
-5. Create the PPT project directory.
-6. Generate all slide images one by one with the same image backend.
-7. Check text readability, style consistency, and content completeness.
-8. Generate `speech.md`.
-9. Assemble the `.pptx` with `assemble_ppt.py`.
+4. State the image generation backend before the first image and ask you to confirm it.
+5. Generate one sample slide with the confirmed image backend for approval of style, layout rhythm, and text quality.
+6. Create the PPT project directory.
+7. Generate all slide images one by one with the same image backend.
+8. Check text readability, style consistency, and content completeness.
+9. Generate `speech.md`.
+10. Assemble the `.pptx` with `assemble_ppt.py`.
 
 ## Usage Tips
 
-- The default script resolution is 1080p-level. If generated slide images look blurry, especially on text-heavy pages, ask the current agent to generate the images at 4K resolution.
+- The default script resolution is 2K 16:9 landscape. If generated slide images look blurry, especially on text-heavy pages, ask the current agent to generate the images at 4K resolution.
 - If you are unhappy with one specific slide's content, layout, colors, or wording, ask the current agent to refine that slide in detail instead of regenerating the whole deck.
 - You can also upload a screenshot or reference image of a PPT style you like, and ask the current agent to imitate its color palette, layout, typography feel, and visual elements.
 
