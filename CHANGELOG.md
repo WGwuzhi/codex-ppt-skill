@@ -8,14 +8,15 @@ Release notes are generated from this file. Keep changelog entries in English.
 
 ### Improvements
 
-- Default image fallback generation to 2K 16:9 output.
+- Default image fallback generation to 2K 16:9 output. (#6)
 
 ### Fixes
 
 ### Documentation
 
-- Require explicit image backend confirmation before sample generation.
-- Clarify multi-agent installation and shared image model configuration.
+- Require explicit image backend confirmation before sample generation. (#6)
+- Document third-party OpenAI-compatible image API configuration for codex-ppt. (#6)
+- Document Claude Code, OpenClaw, Hermes Agent, and other `SKILL.md`-based agent usage. (#6)
 - Add agent contribution guidelines for PR, changelog, and release workflows. (#5)
 
 ## 0.1.0
