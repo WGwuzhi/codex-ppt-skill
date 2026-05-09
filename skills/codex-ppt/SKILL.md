@@ -39,10 +39,10 @@ Backend selection rules:
 - For CLI/API fallback, require `OPENAI_API_KEY`. If the user uses an OpenAI-compatible third-party proxy, also use `OPENAI_BASE_URL`, usually ending in `/v1`.
 - Never ask the user to paste an API key into chat. Ask them to set environment variables locally and confirm when ready.
 
-CLI/API fallback commands use the skill-local Python environment:
+CLI/API fallback commands use the shared runtime environment. Let `{skill_root}` mean the directory containing this `SKILL.md`.
 
 ```bash
-~/.codex/skills/codex-ppt/.venv/bin/python ~/.codex/skills/codex-ppt/scripts/image_gen.py generate \
+~/.codex-ppt-skill/.venv/bin/python {skill_root}/scripts/image_gen.py generate \
   --model gpt-image-2 \
   --prompt-file {prompt_file} \
   --size 3840x2160 \
@@ -53,16 +53,19 @@ CLI/API fallback commands use the skill-local Python environment:
 For CLI/API fallback, first make sure dependencies are installed:
 
 ```bash
-python3 -m venv ~/.codex/skills/codex-ppt/.venv
-~/.codex/skills/codex-ppt/.venv/bin/python -m pip install -r ~/.codex/skills/codex-ppt/requirements.txt
+python3 {skill_root}/scripts/codex_ppt_runtime.py bootstrap
 ```
 
-Use these environment variables for real API calls:
+Use the shared runtime config for real API calls:
 
 ```bash
-export OPENAI_API_KEY="..."
-export OPENAI_BASE_URL="https://your-openai-compatible-endpoint/v1"  # optional
+python3 {skill_root}/scripts/codex_ppt_runtime.py config \
+  --api-key-stdin \
+  --base-url "https://your-openai-compatible-endpoint/v1" \
+  --model gpt-image-2
 ```
+
+This writes `~/.codex-ppt-skill/.env` with mode `0600`. The config is reused by Codex, Claude Code, OpenClaw, Hermes Agent, and other local agents. Process environment variables override `.env` values, and `--model` overrides `CODEX_PPT_IMAGE_MODEL` for a single command.
 
 If a proxy provider exposes a custom model name, pass it with `--model`. The fallback CLI accepts model names containing `gpt-image-`, such as `gpt-image-2` or `openai/gpt-image-2`.
 
@@ -194,7 +197,7 @@ If the user did not specify a destination, use the current working directory or 
 You may initialize the directory structure with:
 
 ```bash
-~/.codex/skills/codex-ppt/.venv/bin/python ~/.codex/skills/codex-ppt/scripts/assemble_ppt.py {base_dir} {deck_name}.pptx --init
+~/.codex-ppt-skill/.venv/bin/python {skill_root}/scripts/assemble_ppt.py {base_dir} {deck_name}.pptx --init
 ```
 
 ### 6. Generate All Slide Images
@@ -272,7 +275,7 @@ After each image is generated, copy or move it into `{base_dir}/{deck_name}/orig
 In CLI/API fallback mode, you may generate slides one at a time or use `generate-batch`. For batch generation, create a JSONL file where each job has a distinct prompt and an `out` value such as `slide_01.png`, then run:
 
 ```bash
-~/.codex/skills/codex-ppt/.venv/bin/python ~/.codex/skills/codex-ppt/scripts/image_gen.py generate-batch \
+~/.codex-ppt-skill/.venv/bin/python {skill_root}/scripts/image_gen.py generate-batch \
   --input {base_dir}/{deck_name}/image_prompts.jsonl \
   --out-dir {base_dir}/{deck_name}/origin_image \
   --size 3840x2160 \
@@ -342,7 +345,7 @@ Use headings that the assembly script can map back to slide numbers:
 Run:
 
 ```bash
-~/.codex/skills/codex-ppt/.venv/bin/python ~/.codex/skills/codex-ppt/scripts/assemble_ppt.py {base_dir} {deck_name}.pptx --aspect-ratio 16:9
+~/.codex-ppt-skill/.venv/bin/python {skill_root}/scripts/assemble_ppt.py {base_dir} {deck_name}.pptx --aspect-ratio 16:9
 ```
 
 Important:
@@ -370,16 +373,15 @@ Report:
 
 ## Local Script Dependencies
 
-Before running `scripts/assemble_ppt.py` or the CLI/API fallback scripts, make sure the local virtual environment exists and has the required packages. If `~/.codex/skills/codex-ppt/.venv/bin/python` is missing, or if importing script dependencies fails, create or refresh the environment:
+Before running `scripts/assemble_ppt.py` or the CLI/API fallback scripts, make sure the shared runtime exists. If `~/.codex-ppt-skill/.venv/bin/python` is missing, or if importing script dependencies fails, create or refresh the environment:
 
 ```bash
-python3 -m venv ~/.codex/skills/codex-ppt/.venv
-~/.codex/skills/codex-ppt/.venv/bin/python -m pip install -r ~/.codex/skills/codex-ppt/requirements.txt
+python3 {skill_root}/scripts/codex_ppt_runtime.py bootstrap
 ```
 
 This is an internal setup step for the skill. Do not ask the user to run these commands unless dependency installation fails and user approval or troubleshooting is required.
 
-`assemble_ppt.py` supports `16:9` and `4:3`. Use `16:9` unless the user requests otherwise. `image_gen.py` requires `OPENAI_API_KEY` for real API calls; `OPENAI_BASE_URL` is optional for OpenAI-compatible proxy providers.
+`assemble_ppt.py` supports `16:9` and `4:3`. Use `16:9` unless the user requests otherwise. `image_gen.py` loads `~/.codex-ppt-skill/.env` automatically for `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `CODEX_PPT_IMAGE_MODEL`. Run `python3 {skill_root}/scripts/codex_ppt_runtime.py doctor --check-api` when troubleshooting API access.
 
 ## Prompting Principles
 

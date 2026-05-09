@@ -47,6 +47,8 @@ GPT_IMAGE_2_MAX_RATIO = 3.0
 
 MAX_IMAGE_BYTES = 50 * 1024 * 1024
 MAX_BATCH_JOBS = 500
+DEFAULT_RUNTIME_HOME = "~/.codex-ppt-skill"
+ENV_FIELDS = ("OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_PPT_IMAGE_MODEL")
 
 
 def _die(message: str, code: int = 1) -> None:
@@ -58,15 +60,54 @@ def _warn(message: str) -> None:
     print(f"Warning: {message}", file=sys.stderr)
 
 
+def _runtime_home() -> Path:
+    return Path(os.getenv("CODEX_PPT_HOME", DEFAULT_RUNTIME_HOME)).expanduser()
+
+
+def _runtime_env_path() -> Path:
+    return _runtime_home() / ".env"
+
+
+def _load_runtime_env() -> None:
+    path = _runtime_env_path()
+    if not path.exists():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key not in ENV_FIELDS or os.getenv(key):
+            continue
+        value = value.strip().strip('"').strip("'")
+        os.environ[key] = value
+
+
+def _default_model() -> str:
+    return os.getenv("CODEX_PPT_IMAGE_MODEL", DEFAULT_MODEL)
+
+
+def _runtime_python_path() -> str:
+    home = _runtime_home()
+    if os.name == "nt":
+        return str(home / ".venv" / "Scripts" / "python.exe")
+    return str(home / ".venv" / "bin" / "python")
+
+
+def _skill_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
 def _dependency_hint(package: str, *, upgrade: bool = False) -> str:
     package_arg = f"-U {package}" if upgrade else package
+    runtime_python = _runtime_python_path()
+    requirements = _skill_root() / "requirements.txt"
     return (
-        "Install codex-ppt dependencies in its local environment first, for example "
-        "`python3 -m venv ~/.codex/skills/codex-ppt/.venv` followed by "
-        "`~/.codex/skills/codex-ppt/.venv/bin/python -m pip install "
-        f"{package_arg}` or reinstall all dependencies with "
-        "`~/.codex/skills/codex-ppt/.venv/bin/python -m pip install -r "
-        "~/.codex/skills/codex-ppt/requirements.txt`."
+        "Install codex-ppt dependencies in the shared runtime first, for example "
+        f"`python3 {_skill_root() / 'scripts' / 'codex_ppt_runtime.py'} bootstrap`, "
+        f"or install {package} directly with `{runtime_python} -m pip install "
+        f"{package_arg}`. Requirements file: `{requirements}`."
     )
 
 
@@ -148,7 +189,7 @@ def _validate_gpt_image_2_size(size: str) -> None:
 
 
 def _validate_size(size: str, model: str) -> None:
-    if model == GPT_IMAGE_2_MODEL:
+    if _is_gpt_image_2_model(model):
         _validate_gpt_image_2_size(size)
         return
 
@@ -182,6 +223,10 @@ def _validate_model(model: str) -> None:
         )
 
 
+def _is_gpt_image_2_model(model: str) -> bool:
+    return GPT_IMAGE_2_MODEL in model
+
+
 def _validate_transparency(background: Optional[str], output_format: str) -> None:
     if background == "transparent" and output_format not in {"png", "webp"}:
         _die("transparent background requires output-format png or webp.")
@@ -193,7 +238,7 @@ def _validate_model_specific_options(
     background: Optional[str],
     input_fidelity: Optional[str] = None,
 ) -> None:
-    if model != GPT_IMAGE_2_MODEL:
+    if not _is_gpt_image_2_model(model):
         return
     if background == "transparent":
         _die(
@@ -910,7 +955,7 @@ class _FileBundle:
 
 
 def _add_shared_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--model", default=_default_model())
     parser.add_argument("--prompt")
     parser.add_argument("--prompt-file")
     parser.add_argument("--n", type=int, default=1)
@@ -947,6 +992,7 @@ def _add_shared_args(parser: argparse.ArgumentParser) -> None:
 
 
 def main() -> int:
+    _load_runtime_env()
     parser = argparse.ArgumentParser(
         description="Fallback CLI for explicit image generation or editing via GPT Image models"
     )
