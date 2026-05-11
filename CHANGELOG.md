@@ -4,8 +4,6 @@ Release notes are generated from this file. Keep changelog entries in English.
 
 ## Unreleased
 
-## 0.2.1
-
 ### Documentation
 
 - Add an `Attention Is All You Need` example deck with preserved paper figures. (#18)
@@ -14,14 +12,16 @@ Release notes are generated from this file. Keep changelog entries in English.
 - Add README examples for assigning original paper figures to specific slides, referencing issue #14. (#18)
 - Document Markdown image references inside `Required images`. (#18)
 - Clarify how to preserve user-supplied figures and result charts in generated decks, including subagent slide generation with approved sample-slide style references. (#18)
+- Document simplified prompt preparation with one self-contained JSON job per slide instead of a separate prompt file and job manifest. (#18)
+- Document relative input image path resolution in slide jobs against the `deck_spec.json` directory. (#18)
+
+## 0.2.1
+
+### Documentation
+
 - Fix README badge labels and GitHub star/fork badge style. (#16)
 - Add GitHub star and fork badges to both READMEs. (#15)
 - Recommend `npx skills` installation commands for Codex, Claude Code, and Hermes Agent. (#13)
-
-### Improvements
-
-- Simplify prompt preparation to write one self-contained JSON job per slide instead of a separate prompt file and job manifest. (#18)
-- Resolve relative input image paths in slide jobs against the `deck_spec.json` directory. (#18)
 
 ### Fixes
 
