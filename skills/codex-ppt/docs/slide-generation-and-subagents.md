@@ -40,6 +40,16 @@ The helper writes:
 
 Each `prompts/slide_XX.json` is a self-contained slide job. It includes the slide number, title, output filename, input image list, whether context images are required, and the full prompt text. Use these JSON job files for built-in image generation, CLI/API fallback coordination, and subagent handoff. Do not create a separate job manifest unless the user explicitly asks for one.
 
+The parent agent is responsible for packaging context before dispatch. A slide subagent only sees its assigned single-slide job, the images explicitly passed to it, and the handoff text. Do not assume the subagent knows the source article, full outline, previous slides, later slides, or any concept held only in the parent agent's conversation context.
+
+For any slide that depends on cross-slide or source-wide meaning, write the necessary background directly into `deck_spec.json` before preparing prompts:
+
+- Use deck-level `deck_context` for canonical concepts that multiple slides may need, such as the source summary, core claim, term list, taxonomy, characters, definitions, chronology, or required naming.
+- Use slide-level `local_context` for page-specific facts that must be visible to that one worker, such as "summarize these six traits", "compare these two methods", "continue this three-step framework", or "use this exact quote".
+- Expand references like "the six traits", "the above framework", "the previous conclusion", or "these examples" into explicit lists or definitions inside `deck_context` or `local_context`. Avoid leaving them as implicit pointers.
+
+The goal is not to make subagents validate missing context. The goal is for the parent agent to hand each worker a complete enough task packet so the worker can simply execute the assigned page.
+
 `slide_jobs.json` is the dispatch state file. It records each slide's prompt job, final output path, status, selected backend, sample generation method, subagent dispatch metadata, result provenance, and blocker state. Do not hand-edit slide statuses; use the bundled status scripts.
 
 `deck_spec.json` may express `required_images` either as structured objects or as Markdown image reference strings. The helper extracts the image path from strings such as `strict input asset\n\n![Result 01](assets/figures/result_01.png)` and carries the surrounding text / alt text into the image role.
@@ -75,6 +85,11 @@ Avoid generating every slide as the same three-card layout. For each slide, choo
     "texture_and_finish": "{flat, paper, dashboard, editorial, whiteboard, etc.}",
     "deck_consistency": "same palette, typography, icon language, texture, and mood across all slides"
   },
+  "deck_context": {
+    "source_summary": "{brief source-wide summary}",
+    "core_claim": "{the deck's central thesis}",
+    "canonical_terms": ["{term 1}", "{term 2}", "{term 3}"]
+  },
   "layout": {
     "role": "{cover, agenda, section divider, concept, process, comparison, timeline, data evidence, architecture, case study, summary, Q&A, etc.}",
     "intent": "{why this page uses this layout: cover, comparison, timeline, data evidence, workflow, summary, etc.}",
@@ -88,6 +103,9 @@ Avoid generating every slide as the same three-card layout. For each slide, choo
     "title": "{slide title}",
     "key_points": ["{point 1}", "{point 2}", "{point 3}"],
     "text_quality": "render all Chinese text exactly, clearly, and without garbled characters"
+  },
+  "local_context": {
+    "required_background": "{facts, lists, definitions, comparisons, or prior-slide references this slide needs to be self-contained}"
   },
   "visual_elements": {
     "main_visual": "{icons, diagram, chart, illustration, dashboard cards, collage, or other content-specific visual idea}",
@@ -116,6 +134,7 @@ Parent agent responsibilities:
 - Run `prepare_slide_prompts.py` or otherwise write full per-slide JSON jobs and `slide_jobs.json` before delegation.
 - Run `slide_job_status.py` to see dispatch slots and pending slide ids before each batch.
 - Ensure the approved sample slide is included in every non-sample job as a style-only input image when available.
+- Ensure every dispatched slide job is self-contained. If a slide summarizes, compares, continues, or refers to deck-wide concepts, put the required concepts into `deck_context` or the slide's `local_context` before running `prepare_slide_prompts.py`.
 - Ensure `sample_generation_method` is present in `deck_spec.json`, every `prompts/slide_XX.json`, and `slide_jobs.json`; it must describe the exact backend/tool/mode used to generate the approved sample.
 - If the approved sample slide already exists and should not be regenerated, mark that slide in `deck_spec.json` with `sample_approved: true` or `approved_sample: true` before running `prepare_slide_prompts.py`; the helper records it as `accepted` when the final image file exists.
 - In built-in `image_gen` mode, ensure every slide-level required local source image has already been inspected with `view_image` before any delegated job that depends on it.
