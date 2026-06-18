@@ -26,10 +26,16 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from image_providers import create_image_provider
-from image_providers.atlascloud import atlascloud_model_for_operation
+from image_providers.atlascloud import AtlasCloudImageProvider, atlascloud_model_for_operation
+from image_providers.base import ImageProvider
+from image_providers.codex_oauth import (
+    DEFAULT_CODEX_BASE_URL,
+    CodexOAuthImageProvider,
+)
+from image_providers.openai_compatible import OpenAICompatibleImageProvider
 
 DEFAULT_MODEL = "gpt-image-2"
-DEFAULT_SIZE = "2560x1440"
+DEFAULT_SIZE = "2048x1152"
 DEFAULT_QUALITY = "medium"
 DEFAULT_OUTPUT_FORMAT = "png"
 DEFAULT_CONCURRENCY = 5
@@ -51,7 +57,14 @@ GPT_IMAGE_2_MAX_RATIO = 3.0
 MAX_IMAGE_BYTES = 50 * 1024 * 1024
 MAX_BATCH_JOBS = 500
 DEFAULT_RUNTIME_HOME = "~/.codex-ppt-skill"
-ENV_FIELDS = ("OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_PPT_IMAGE_MODEL")
+ENV_FIELDS = (
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "CODEX_PPT_IMAGE_MODEL",
+    "CODEX_PPT_IMAGE_BACKEND",
+    "CODEX_IMAGES_BASE_URL",
+)
+VALID_IMAGE_BACKENDS = ("auto", "codex-oauth", "atlascloud", "openai-compatible")
 
 
 def _die(message: str, code: int = 1) -> None:
@@ -91,15 +104,23 @@ def _default_model() -> str:
     return os.getenv("CODEX_PPT_IMAGE_MODEL", DEFAULT_MODEL)
 
 
+def _default_backend() -> str:
+    return os.getenv("CODEX_PPT_IMAGE_BACKEND", "auto")
+
+
 def _api_base_url() -> Optional[str]:
     return os.getenv("OPENAI_BASE_URL") or None
 
 
-def _api_target_label() -> str:
+def _api_target_label(backend: Optional[str] = None) -> str:
+    selected = backend or _preview_backend(None)
+    if selected == "codex-oauth":
+        return "Codex OAuth image backend (using local Codex login)"
+    if selected == "atlascloud":
+        base_url = _api_base_url()
+        return f"AtlasCloud provider adapter (OPENAI_BASE_URL={base_url})"
     base_url = _api_base_url()
     if base_url:
-        if _is_atlascloud_base_url(base_url):
-            return f"AtlasCloud provider adapter (OPENAI_BASE_URL={base_url})"
         return f"third-party image API or OpenAI-compatible proxy (OPENAI_BASE_URL={base_url})"
     return "official OpenAI API (OPENAI_BASE_URL unset)"
 
@@ -109,18 +130,40 @@ def _is_atlascloud_base_url(base_url: str) -> bool:
     return "atlascloud.ai" in hostname.lower()
 
 
-def _preview_endpoint(kind: str) -> str:
+def _preview_backend(backend: Optional[str]) -> str:
+    selected = (backend or _default_backend()).strip().lower()
+    if selected == "auto":
+        if CodexOAuthImageProvider.available():
+            return "codex-oauth"
+        base_url = _api_base_url()
+        if base_url and _is_atlascloud_base_url(base_url):
+            return "atlascloud"
+        return "openai-compatible"
+    return selected
+
+
+def _preview_endpoint(kind: str, *, backend: Optional[str] = None) -> str:
+    selected = _preview_backend(backend)
+    if selected == "codex-oauth":
+        base_url = (
+            os.getenv("CODEX_IMAGES_BASE_URL")
+            or DEFAULT_CODEX_BASE_URL
+        )
+        if kind == "edit":
+            return f"{base_url.rstrip('/')}/images/edits"
+        return f"{base_url.rstrip('/')}/images/generations"
     base_url = _api_base_url()
-    if base_url and _is_atlascloud_base_url(base_url):
+    if selected == "atlascloud" or (base_url and _is_atlascloud_base_url(base_url)):
         return "/api/v1/model/generateImage"
     if kind == "edit":
         return "/v1/images/edits"
     return "/v1/images/generations"
 
 
-def _preview_model(model: str, kind: str) -> str:
+def _preview_model(model: str, kind: str, *, backend: Optional[str] = None) -> str:
+    selected = _preview_backend(backend)
     base_url = _api_base_url()
-    if base_url and _is_atlascloud_base_url(base_url):
+    if selected == "atlascloud" or (base_url and _is_atlascloud_base_url(base_url)):
         operation = "edit" if kind == "edit" else "text-to-image"
         return atlascloud_model_for_operation(model, operation)
     return model
@@ -149,12 +192,50 @@ def _dependency_hint(package: str, *, upgrade: bool = False) -> str:
     )
 
 
-def _ensure_api_key(dry_run: bool) -> None:
+def _create_provider(args: argparse.Namespace) -> ImageProvider:
+    try:
+        return create_image_provider(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            base_url=_api_base_url(),
+            backend=getattr(args, "backend", None),
+        )
+    except (RuntimeError, ValueError) as exc:
+        _die(str(exc))
+    raise AssertionError("unreachable")
+
+
+def _provider_backend_name(provider: ImageProvider) -> str:
+    if isinstance(provider, CodexOAuthImageProvider):
+        return "codex-oauth"
+    if isinstance(provider, AtlasCloudImageProvider):
+        return "atlascloud"
+    if isinstance(provider, OpenAICompatibleImageProvider):
+        return "openai-compatible"
+    return provider.__class__.__name__
+
+
+def _provider_preview(provider: ImageProvider) -> Dict[str, Any]:
+    if isinstance(provider, CodexOAuthImageProvider):
+        return {
+            "auth_file": str(provider.auth_file),
+            "codex_base_url": provider.codex_base_url,
+        }
+    return {}
+
+
+def _ensure_provider_config(provider: ImageProvider, dry_run: bool) -> None:
+    backend = _provider_backend_name(provider)
+    if backend == "codex-oauth":
+        print(
+            f"Codex OAuth auth is available. API target: {_api_target_label(backend)}.",
+            file=sys.stderr,
+        )
+        return
     if os.getenv("OPENAI_API_KEY"):
-        print(f"OPENAI_API_KEY is set. API target: {_api_target_label()}.", file=sys.stderr)
+        print(f"OPENAI_API_KEY is set. API target: {_api_target_label(backend)}.", file=sys.stderr)
         return
     if dry_run:
-        _warn(f"OPENAI_API_KEY is not set; dry-run only. API target: {_api_target_label()}.")
+        _warn(f"OPENAI_API_KEY is not set; dry-run only. API target: {_api_target_label(backend)}.")
         return
     runtime_script = _skill_root() / "scripts" / "codex_ppt_runtime.py"
     config_doc = _skill_root() / "docs" / "image-model-configuration.md"
@@ -170,9 +251,9 @@ def _ensure_api_key(dry_run: bool) -> None:
         command = f'python3 {runtime_script} config --api-key "your-api-key" --model {model}'
         target_hint = "Detected official OpenAI API mode because OPENAI_BASE_URL is not set."
     _die(
-        "OPENAI_API_KEY is not set for codex-ppt CLI/API fallback.\n"
+        "OPENAI_API_KEY is not set for the selected codex-ppt image provider.\n"
         f"{target_hint}\n"
-        "Use the built-in image tool if it is available. Otherwise configure the shared runtime once:\n"
+        "Configure the shared runtime once, or use --backend auto with Codex OAuth auth available:\n"
         f"  {command}\n"
         "To use a third-party proxy, set OPENAI_BASE_URL and the provider's model name.\n"
         f"Details: {config_doc}"
@@ -324,9 +405,6 @@ def _validate_generate_payload(payload: Dict[str, Any]) -> None:
     _validate_quality(quality)
     _validate_background(background)
     _validate_model_specific_options(model=model, background=background)
-    oc = payload.get("output_compression")
-    if oc is not None and not (0 <= int(oc) <= 100):
-        _die("output_compression must be between 0 and 100")
 
 
 def _build_output_paths(
@@ -604,9 +682,11 @@ async def _run_generate_batch(args: argparse.Namespace) -> int:
         "quality": args.quality,
         "background": args.background,
         "output_format": args.output_format,
-        "output_compression": args.output_compression,
-        "moderation": args.moderation,
     }
+
+    provider = _create_provider(args)
+    backend = _provider_backend_name(provider)
+    _ensure_provider_config(provider, args.dry_run)
 
     if args.dry_run:
         for i, job in enumerate(jobs, start=1):
@@ -642,19 +722,20 @@ async def _run_generate_batch(args: argparse.Namespace) -> int:
                 ]
             _print_request(
                 {
-                    "endpoint": _preview_endpoint("generate"),
+                    "backend": backend,
+                    "endpoint": _preview_endpoint("generate", backend=backend),
                     "job": i,
                     "outputs": [str(p) for p in outputs],
                     "outputs_downscaled": downscaled,
+                    **_provider_preview(provider),
                     **{
                         **job_payload,
-                        "model": _preview_model(str(job_payload["model"]), "generate"),
+                        "model": _preview_model(str(job_payload["model"]), "generate", backend=backend),
                     },
                 }
             )
         return 0
 
-    provider = create_image_provider(api_key=os.getenv("OPENAI_API_KEY"), base_url=_api_base_url())
     sem = asyncio.Semaphore(args.concurrency)
 
     any_failed = False
@@ -744,8 +825,6 @@ def _generate(args: argparse.Namespace) -> None:
         "quality": args.quality,
         "background": args.background,
         "output_format": args.output_format,
-        "output_compression": args.output_compression,
-        "moderation": args.moderation,
     }
     payload = {k: v for k, v in payload.items() if v is not None}
 
@@ -757,26 +836,31 @@ def _generate(args: argparse.Namespace) -> None:
     if args.downscale_max_dim is not None:
         downscaled = [str(_derive_downscale_path(p, args.downscale_suffix)) for p in output_paths]
 
+    provider = _create_provider(args)
+    backend = _provider_backend_name(provider)
+    _ensure_provider_config(provider, args.dry_run)
+
     if args.dry_run:
         _print_request(
             {
-                "endpoint": _preview_endpoint("generate"),
+                "backend": backend,
+                "endpoint": _preview_endpoint("generate", backend=backend),
                 "outputs": [str(p) for p in output_paths],
                 "outputs_downscaled": downscaled,
+                **_provider_preview(provider),
                 **{
                     **payload,
-                    "model": _preview_model(str(payload["model"]), "generate"),
+                    "model": _preview_model(str(payload["model"]), "generate", backend=backend),
                 },
             }
         )
         return
 
     print(
-        "Calling Image API (generation). This can take up to a couple of minutes.",
+        f"Calling image backend ({backend}) for generation. This can take up to a couple of minutes.",
         file=sys.stderr,
     )
     started = time.time()
-    provider = create_image_provider(api_key=os.getenv("OPENAI_API_KEY"), base_url=_api_base_url())
     images = provider.generate(payload)
     elapsed = time.time() - started
     print(f"Generation completed in {elapsed:.1f}s.", file=sys.stderr)
@@ -796,14 +880,6 @@ def _edit(args: argparse.Namespace) -> None:
     prompt = _augment_prompt(args, prompt)
 
     image_paths = _check_image_paths(args.image)
-    mask_path = Path(args.mask) if args.mask else None
-    if mask_path:
-        if not mask_path.exists():
-            _die(f"Mask file not found: {mask_path}")
-        if mask_path.suffix.lower() != ".png":
-            _warn(f"Mask should be a PNG with an alpha channel: {mask_path}")
-        if mask_path.stat().st_size > MAX_IMAGE_BYTES:
-            _warn(f"Mask exceeds 50MB limit: {mask_path}")
 
     payload = {
         "model": args.model,
@@ -813,9 +889,7 @@ def _edit(args: argparse.Namespace) -> None:
         "quality": args.quality,
         "background": args.background,
         "output_format": args.output_format,
-        "output_compression": args.output_compression,
         "input_fidelity": args.input_fidelity,
-        "moderation": args.moderation,
     }
     payload = {k: v for k, v in payload.items() if v is not None}
 
@@ -828,31 +902,34 @@ def _edit(args: argparse.Namespace) -> None:
     if args.downscale_max_dim is not None:
         downscaled = [str(_derive_downscale_path(p, args.downscale_suffix)) for p in output_paths]
 
+    provider = _create_provider(args)
+    backend = _provider_backend_name(provider)
+    _ensure_provider_config(provider, args.dry_run)
+
     if args.dry_run:
         payload_preview = dict(payload)
         payload_preview["image"] = [str(p) for p in image_paths]
-        if mask_path:
-            payload_preview["mask"] = str(mask_path)
         _print_request(
             {
-                "endpoint": _preview_endpoint("edit"),
+                "backend": backend,
+                "endpoint": _preview_endpoint("edit", backend=backend),
                 "outputs": [str(p) for p in output_paths],
                 "outputs_downscaled": downscaled,
+                **_provider_preview(provider),
                 **{
                     **payload_preview,
-                    "model": _preview_model(str(payload_preview["model"]), "edit"),
+                    "model": _preview_model(str(payload_preview["model"]), "edit", backend=backend),
                 },
             }
         )
         return
 
     print(
-        f"Calling Image API (edit) with {len(image_paths)} image(s).",
+        f"Calling image backend ({backend}) for edit with {len(image_paths)} image(s).",
         file=sys.stderr,
     )
     started = time.time()
-    provider = create_image_provider(api_key=os.getenv("OPENAI_API_KEY"), base_url=_api_base_url())
-    images = provider.edit(payload, image_paths, mask_path)
+    images = provider.edit(payload, image_paths)
 
     elapsed = time.time() - started
     print(f"Edit completed in {elapsed:.1f}s.", file=sys.stderr)
@@ -867,16 +944,15 @@ def _edit(args: argparse.Namespace) -> None:
 
 
 def _add_shared_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--backend", choices=VALID_IMAGE_BACKENDS, default=_default_backend())
     parser.add_argument("--model", default=_default_model())
-    parser.add_argument("--prompt")
-    parser.add_argument("--prompt-file")
+    parser.add_argument("--prompt", help="Prompt text. Prefer this for sample generation.")
+    parser.add_argument("--prompt-file", help="Prompt file path, or '-' for stdin. Prefer this for saved slide jobs.")
     parser.add_argument("--n", type=int, default=1)
     parser.add_argument("--size", default=DEFAULT_SIZE)
     parser.add_argument("--quality", default=DEFAULT_QUALITY)
     parser.add_argument("--background")
     parser.add_argument("--output-format")
-    parser.add_argument("--output-compression", type=int)
-    parser.add_argument("--moderation")
     parser.add_argument("--out", default=DEFAULT_OUTPUT_PATH)
     parser.add_argument("--out-dir")
     parser.add_argument("--force", action="store_true")
@@ -921,14 +997,13 @@ def main() -> int:
     _add_shared_args(batch_parser)
     batch_parser.add_argument("--input", required=True, help="Path to JSONL file (one job per line)")
     batch_parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
-    batch_parser.add_argument("--max-attempts", type=int, default=3)
+    batch_parser.add_argument("--max-attempts", type=int, default=5)
     batch_parser.add_argument("--fail-fast", action="store_true")
     batch_parser.set_defaults(func=_generate_batch)
 
     edit_parser = subparsers.add_parser("edit", help="Edit an existing image")
     _add_shared_args(edit_parser)
     edit_parser.add_argument("--image", action="append", required=True)
-    edit_parser.add_argument("--mask")
     edit_parser.add_argument("--input-fidelity")
     edit_parser.set_defaults(func=_edit)
 
@@ -937,10 +1012,8 @@ def main() -> int:
         _die("--n must be between 1 and 10")
     if getattr(args, "concurrency", 1) < 1 or getattr(args, "concurrency", 1) > 25:
         _die("--concurrency must be between 1 and 25")
-    if getattr(args, "max_attempts", 3) < 1 or getattr(args, "max_attempts", 3) > 10:
+    if getattr(args, "max_attempts", 5) < 1 or getattr(args, "max_attempts", 5) > 10:
         _die("--max-attempts must be between 1 and 10")
-    if args.output_compression is not None and not (0 <= args.output_compression <= 100):
-        _die("--output-compression must be between 0 and 100")
     if args.command == "generate-batch" and not args.out_dir:
         _die("generate-batch requires --out-dir")
     if getattr(args, "downscale_max_dim", None) is not None and args.downscale_max_dim < 1:
@@ -955,8 +1028,6 @@ def main() -> int:
         background=args.background,
         input_fidelity=getattr(args, "input_fidelity", None),
     )
-    _ensure_api_key(args.dry_run)
-
     args.func(args)
     return 0
 
